@@ -1,4 +1,42 @@
+# ============================
+# Datos crudos (muy pesados para GitHub)
+# ============================
 data/*.csv
-data/**/*.csv
-data/**/*.parquet
-data/**/*.pickle
+data/UrbanBus/
+
+# ============================
+# Datos procesados - EXCEPCION
+# Se incluyen explicitamente en el repo
+# ============================
+!data/processed/
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# ============================
+# Jupyter
+# ============================
+.ipynb_checkpoints/
+
+# ============================
+# OS
+# ============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================
+# IDEs
+# ============================
+.vscode/
+.idea/
+*.swp
+*.swo
