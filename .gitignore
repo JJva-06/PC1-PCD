@@ -1,0 +1,4 @@
+data/*.csv
+data/**/*.csv
+data/**/*.parquet
+data/**/*.pickle
