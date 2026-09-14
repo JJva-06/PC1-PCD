@@ -146,8 +146,12 @@ Resultado del pipeline de limpieza, agregado en **ventanas de 15 minutos** por e
 
 ## Referencias
 
-- Zou, X. et al. (2022). *Passenger Flow Prediction Using Smart Card Data from Connected Bus Systems*
-- Hao, S. et al. (2019). *Multi-Graph Convolutional-Recurrent Neural Network (MGC-RNN) for Short-Term Forecasting of Transit Passenger Flow*
-- Liu, Y. et al. (2020). *Short-term origin-destination demand prediction in urban rail transit*
-- DST-TransitNet (2023). *A Dynamic Spatio-Temporal Model for Robust Station-Level Transit Ridership Prediction*
-- AI-based Neural Network Models for Bus Passenger Demand Forecasting
+- Zou, X. et al. (2022). *Passenger Flow Prediction Using Smart Card Data from Connected Bus System Based on Interpretable XGBoost*
+- He, Y. et al. (2022). *Multi-Graph Convolutional-Recurrent Neural Network (MGC-RNN) for Short-Term Forecasting of Transit Passenger Flow*
+- Zhang, J. et al. (2021). *Short-term origin-destination demand prediction in urban rail transit systems: A channel-wise attentive split-convolutional neural network method*
+- Wang, J. & Shalaby, A. (2025). *DST-TransitNet: A Dynamic Spatio-Temporal Model for Robust Station-Level Transit Ridership Prediction*
+- Xiu, C. et al. (2024). *Correlation-based feature selection and parallel spatiotemporal networks for efficient passenger flow forecasting in metro systems*
+- Zhai, X. & Shen, Y. (2023). *Short-Term Bus Passenger Flow Prediction Based on Graph Diffusion Convolutional Recurrent Neural Network*
+- Wang, X. et al. (2024).*Large-Scale Origin–Destination Prediction for Urban Rail Transit Network Based on Graph Convolutional Neural Network*
+- Talusan, J. et al. (2022). *On Designing Day Ahead and Same Day Ridership Level Prediction Models for City-Scale Transit Networks Using Noisy APC Data*
+- Liyanage, S. et al. (2022). *AI-based neural network models for bus passenger demand forecasting using smart card data*
