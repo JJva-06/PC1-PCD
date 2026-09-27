@@ -5,9 +5,17 @@ data/*.csv
 data/UrbanBus/
 
 # ============================
-# Datos procesados - EXCEPCION
+# Capas intermedias del pipeline medallon
+# (Parquets intermedios, se regeneran ejecutando los notebooks)
+# ============================
+data/bronze/
+data/silver/
+
+# ============================
+# Datos procesados (capa Gold) - EXCEPCION
 # Se incluyen explicitamente en el repo
 # ============================
+!data/gold/
 !data/processed/
 
 # ============================
