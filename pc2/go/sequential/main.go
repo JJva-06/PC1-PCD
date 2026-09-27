@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -147,7 +148,7 @@ func main() {
 		if weekday == 0 {
 			weekday = 7 // Go Sunday es 0, Python/Polars usó isoweekday? En polars es 1=Lunes, 7=Domingo
 		}
-		dateStr := binTime.Format("2006-10-02")
+		dateStr := binTime.Format("2006-01-02")
 
 		results = append(results, ResultRow{
 			BoardingStopStn:  stn,
@@ -177,9 +178,16 @@ func main() {
 		"unique_services", "dominant_card_type", "hour", "day_of_week", "date",
 	})
 
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].BoardingStopStn == results[j].BoardingStopStn {
+			return results[i].TimeBin15Min.Before(results[j].TimeBin15Min)
+		}
+		return results[i].BoardingStopStn < results[j].BoardingStopStn
+	})
+
 	for _, r := range results {
 		// Output datetime en UTC con formato similar a polars (ej. 2017-10-01 05:00:00.000000)
-		dtOut := r.TimeBin15Min.Format("2006-10-02 15:04:05.000000")
+		dtOut := r.TimeBin15Min.Format("2006-01-02 15:04:05.000000")
 		writer.Write([]string{
 			r.BoardingStopStn,
 			dtOut,
