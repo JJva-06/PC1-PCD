@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -200,5 +201,8 @@ func main() {
 		})
 	}
 
-	fmt.Printf("[Secuencial] Guardado en %s (Total Final: %v)\n", outputFile, time.Since(start))
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	elapsedMs := time.Since(start).Milliseconds()
+	fmt.Printf("STATS|%d|%d\n", elapsedMs, m.Sys/1024/1024)
 }

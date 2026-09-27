@@ -247,5 +247,8 @@ func main() {
 		})
 	}
 
-	fmt.Printf("[Concurrente] Guardado en %s (Total con I/O: %v, Workers: %d)\n", outputFile, time.Since(start), *numWorkers)
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	elapsedMs := time.Since(start).Milliseconds()
+	fmt.Printf("STATS|%d|%d\n", elapsedMs, m.Sys/1024/1024)
 }
