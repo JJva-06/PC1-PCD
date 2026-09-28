@@ -14,9 +14,9 @@ import (
 
 // Indices de las columnas en el CSV de Silver
 const (
-	IdxCardType         = 1
-	IdxBusServiceNumber = 3
-	IdxBoardingStopStn  = 7
+	IdxCardType          = 1
+	IdxBusServiceNumber  = 3
+	IdxBoardingStopStn   = 7
 	IdxRideStartDatetime = 13
 )
 
@@ -42,8 +42,8 @@ type ResultRow struct {
 func main() {
 	start := time.Now()
 
-	inputFile := "data/silver/bus_data_oct2017_clean.csv"
-	outputFile := "data/gold/dataset_go_seq.csv"
+	inputFile := "../../../data/silver/bus_data_oct2017_clean.csv"
+	outputFile := "../../../data/gold/dataset_go_seq.csv"
 
 	file, err := os.Open(inputFile)
 	if err != nil {
@@ -125,7 +125,7 @@ func main() {
 	for key, agg := range globalAgg {
 		parts := strings.Split(key, "|")
 		stn := parts[0]
-		
+
 		// Encontrar dominante
 		var domCard string
 		var maxC int

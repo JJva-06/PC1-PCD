@@ -16,9 +16,9 @@ import (
 
 // Indices de las columnas en el CSV de Silver
 const (
-	IdxCardType         = 1
-	IdxBusServiceNumber = 3
-	IdxBoardingStopStn  = 7
+	IdxCardType          = 1
+	IdxBusServiceNumber  = 3
+	IdxBoardingStopStn   = 7
 	IdxRideStartDatetime = 13
 )
 
@@ -92,8 +92,8 @@ func main() {
 
 	start := time.Now()
 
-	inputFile := "data/silver/bus_data_oct2017_clean.csv"
-	outputFile := "data/gold/dataset_go_conc.csv"
+	inputFile := "../../../data/silver/bus_data_oct2017_clean.csv"
+	outputFile := "../../../data/gold/dataset_go_conc.csv"
 
 	file, err := os.Open(inputFile)
 	if err != nil {
