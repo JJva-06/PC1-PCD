@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/csv"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"runtime"
@@ -12,15 +10,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 )
 
-// Indices de las columnas en el CSV de Silver
-const (
-	IdxCardType          = 1
-	IdxBusServiceNumber  = 3
-	IdxBoardingStopStn   = 7
-	IdxRideStartDatetime = 13
-)
+// InputRecord representa una fila del Parquet de Silver (solo los campos necesarios)
+type InputRecord struct {
+	CardType            string
+	BusServiceNumber    string
+	BoardingStopStn     string
+	RideStartDatetimeUs int64
+}
 
 type AggregationData struct {
 	PassengerCount int
@@ -39,30 +39,36 @@ type ResultRow struct {
 	Date             string
 }
 
-// Representa un lote de filas leidas del CSV para amortizar el costo de enviarlas por channel
-type Chunk [][]string
+// OutputRow es la estructura para escribir el Parquet de salida (Gold)
+type OutputRow struct {
+	BoardingStopStn  string `parquet:"Boarding_stop_stn"`
+	TimeBin15Min     string `parquet:"time_bin_15min"`
+	PassengerCount   int64  `parquet:"passenger_count"`
+	UniqueServices   int64  `parquet:"unique_services"`
+	DominantCardType string `parquet:"dominant_card_type"`
+	Hour             int64  `parquet:"hour"`
+	DayOfWeek        int64  `parquet:"day_of_week"`
+	Date             string `parquet:"date"`
+}
+
+// Representa un lote de filas leidas del Parquet para amortizar el costo de enviarlas por channel
+type Chunk []InputRecord
 
 func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	// Memoria local para este worker. NO se requiere Mutex.
 	localAgg := make(map[string]*AggregationData)
-	layout := "2006-01-02T15:04:05.000000"
 
 	for chunk := range jobs {
 		for _, record := range chunk {
-			stn := record[IdxBoardingStopStn]
-			dtStr := record[IdxRideStartDatetime]
-			svc := record[IdxBusServiceNumber]
-			cType := record[IdxCardType]
+			stn := record.BoardingStopStn
+			svc := record.BusServiceNumber
+			cType := record.CardType
 
-			dt, err := time.Parse(layout, dtStr)
-			if err != nil {
-				dt, err = time.Parse("2006-01-02T15:04:05", dtStr) // Fallback 1
-				if err != nil {
-					dt, _ = time.Parse("2006-01-02 15:04:05", dtStr) // Fallback 2
-				}
-			}
+			// Timestamp en microsegundos desde epoch (timestamp[us] en Parquet)
+			tsUs := record.RideStartDatetimeUs
+			dt := time.Unix(tsUs/1_000_000, (tsUs%1_000_000)*1000).UTC()
 
 			bin := dt.Truncate(15 * time.Minute)
 			key := fmt.Sprintf("%s|%d", stn, bin.Unix())
@@ -85,6 +91,17 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 	results <- localAgg
 }
 
+// findColumnIndex busca el índice de una columna por nombre en el schema del Parquet
+func findColumnIndex(schema *parquet.Schema, name string) int {
+	for i, field := range schema.Fields() {
+		if field.Name() == name {
+			return i
+		}
+	}
+	log.Fatalf("Columna '%s' no encontrada en el schema del Parquet", name)
+	return -1
+}
+
 func main() {
 	numWorkers := flag.Int("workers", runtime.NumCPU(), "Número de workers")
 	chunkSize := flag.Int("chunksize", 5000, "Tamaño del chunk de registros")
@@ -92,69 +109,94 @@ func main() {
 
 	start := time.Now()
 
-	inputFile := "../../../data/silver/bus_data_oct2017_clean.csv"
-	outputFile := "../../../data/gold/dataset_go_conc.csv"
+	inputFile := "../../../data/silver/bus_data_oct2017_clean.parquet"
+	outputFile := "../../../data/gold/dataset_go_conc.parquet"
 
-	file, err := os.Open(inputFile)
+	// Abrir archivo Parquet de entrada
+	f, err := os.Open(inputFile)
 	if err != nil {
 		log.Fatalf("Error abriendo archivo input: %v", err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	reader := csv.NewReader(file)
-	if _, err := reader.Read(); err != nil {
-		log.Fatalf("Error leyendo header: %v", err)
+	stat, err := f.Stat()
+	if err != nil {
+		log.Fatalf("Error obteniendo stat del archivo: %v", err)
 	}
 
+	pf, err := parquet.OpenFile(f, stat.Size())
+	if err != nil {
+		log.Fatalf("Error abriendo Parquet: %v", err)
+	}
+
+	// Descubrir índices de columnas por nombre
+	schema := pf.Schema()
+	idxCardType := findColumnIndex(schema, "Card_Type")
+	idxBusSvc := findColumnIndex(schema, "Bus_Service_Number")
+	idxBoardingStn := findColumnIndex(schema, "Boarding_stop_stn")
+	idxRideDatetime := findColumnIndex(schema, "ride_start_datetime")
+
 	jobs := make(chan Chunk, *numWorkers*2)
-	results := make(chan map[string]*AggregationData, *numWorkers)
+	resultsCh := make(chan map[string]*AggregationData, *numWorkers)
 
 	var wg sync.WaitGroup
 
 	// Iniciar pool de workers
 	for w := 1; w <= *numWorkers; w++ {
 		wg.Add(1)
-		go worker(jobs, results, &wg)
+		go worker(jobs, resultsCh, &wg)
 	}
 
-	// Goroutine Productor: Lee CSV y encola Chunks
+	// Goroutine Productor: Lee Parquet row groups y encola Chunks
 	go func() {
-		var currentChunk [][]string
-		for {
-			record, err := reader.Read()
-			if err == io.EOF {
-				if len(currentChunk) > 0 {
-					jobs <- currentChunk
-				}
-				break
-			}
-			if err != nil {
-				continue
-			}
+		var currentChunk []InputRecord
 
-			currentChunk = append(currentChunk, record)
-			if len(currentChunk) == *chunkSize {
-				jobs <- currentChunk
-				currentChunk = nil // Reset
+		for _, rg := range pf.RowGroups() {
+			rows := make([]parquet.Row, *chunkSize)
+			reader := rg.Rows()
+
+			for {
+				n, err := reader.ReadRows(rows)
+				for i := 0; i < n; i++ {
+					row := rows[i]
+					rec := InputRecord{
+						CardType:            row[idxCardType].String(),
+						BusServiceNumber:    row[idxBusSvc].String(),
+						BoardingStopStn:     row[idxBoardingStn].String(),
+						RideStartDatetimeUs: row[idxRideDatetime].Int64(),
+					}
+					currentChunk = append(currentChunk, rec)
+					if len(currentChunk) == *chunkSize {
+						jobs <- currentChunk
+						currentChunk = nil
+					}
+				}
+				if err != nil {
+					break
+				}
 			}
+			reader.Close()
 		}
-		close(jobs) // Equivale a EOF_SIGNAL en el modelo Promela
+
+		if len(currentChunk) > 0 {
+			jobs <- currentChunk
+		}
+		close(jobs)
 	}()
 
 	// Goroutine Monitor: Cierra el canal de resultados cuando todos los workers terminen
 	go func() {
 		wg.Wait()
-		close(results)
+		close(resultsCh)
 	}()
 
 	// Hilo principal (Reducer): Unifica los resultados parciales en un mapa global
 	globalAgg := make(map[string]*AggregationData)
 
-	for localAgg := range results {
+	for localAgg := range resultsCh {
 		for key, lData := range localAgg {
 			gData, exists := globalAgg[key]
 			if !exists {
-				// Crear e inicializar para evitar referencias cruzadas
 				gData = &AggregationData{
 					PassengerCount: 0,
 					Services:       make(map[string]struct{}),
@@ -212,21 +254,6 @@ func main() {
 		})
 	}
 
-	// Escribir CSV
-	outFile, err := os.Create(outputFile)
-	if err != nil {
-		log.Fatalf("Error creando archivo de salida: %v", err)
-	}
-	defer outFile.Close()
-
-	writer := csv.NewWriter(outFile)
-	defer writer.Flush()
-
-	writer.Write([]string{
-		"Boarding_stop_stn", "time_bin_15min", "passenger_count",
-		"unique_services", "dominant_card_type", "hour", "day_of_week", "date",
-	})
-
 	sort.Slice(outRows, func(i, j int) bool {
 		if outRows[i].BoardingStopStn == outRows[j].BoardingStopStn {
 			return outRows[i].TimeBin15Min.Before(outRows[j].TimeBin15Min)
@@ -234,17 +261,23 @@ func main() {
 		return outRows[i].BoardingStopStn < outRows[j].BoardingStopStn
 	})
 
+	// Escribir Parquet de salida
+	var parquetOut []OutputRow
 	for _, r := range outRows {
-		writer.Write([]string{
-			r.BoardingStopStn,
-			r.TimeBin15Min.Format("2006-01-02 15:04:05.000000"),
-			fmt.Sprintf("%d", r.PassengerCount),
-			fmt.Sprintf("%d", r.UniqueServices),
-			r.DominantCardType,
-			fmt.Sprintf("%d", r.Hour),
-			fmt.Sprintf("%d", r.DayOfWeek),
-			r.Date,
+		parquetOut = append(parquetOut, OutputRow{
+			BoardingStopStn:  r.BoardingStopStn,
+			TimeBin15Min:     r.TimeBin15Min.Format("2006-01-02 15:04:05.000000"),
+			PassengerCount:   int64(r.PassengerCount),
+			UniqueServices:   int64(r.UniqueServices),
+			DominantCardType: r.DominantCardType,
+			Hour:             int64(r.Hour),
+			DayOfWeek:        int64(r.DayOfWeek),
+			Date:             r.Date,
 		})
+	}
+
+	if err := parquet.WriteFile(outputFile, parquetOut); err != nil {
+		log.Fatalf("Error escribiendo archivo Parquet de salida: %v", err)
 	}
 
 	var m runtime.MemStats
