@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime"
@@ -141,6 +142,9 @@ func main() {
 				agg.CardTypes[cType]++
 			}
 			if err != nil {
+				if err != io.EOF {
+					log.Fatalf("Error fatal al leer el dataset Parquet: %v", err)
+				}
 				break
 			}
 		}
