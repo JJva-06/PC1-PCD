@@ -17,10 +17,9 @@ El objetivo del algoritmo es leer `1,952,152` registros transaccionales validado
 Dada la naturaleza del problema, se descartó el uso de un cerrojo global (`sync.Mutex`) por cada línea del CSV debido a la alta contención que generaría. En su lugar, se implementó un **Worker Pool con Reducción Local (Patrón Map-Reduce)**.
 
 ### Fases del Pipeline:
-1. **Productor (Lector I/O):** Un único *Goroutine* lee el CSV secuencialmente. Para amortizar el costo de sincronización en los canales, empaqueta los registros en *Chunks* de 5,000 líneas y los envía a un canal de tareas (`jobs`). Al llegar al EOF, cierra el canal.
-2. **Workers (Mapeadores):** Un *pool* estático de `W` *Goroutines* consume del canal `jobs`. Cada worker procesa sus lotes, convirtiendo los timestamps y agregando la demanda en un **mapa de memoria local**. 
-   - *Trade-off:* Al usar memoria local, duplicamos el uso de RAM, pero logramos **0 contención (Zero Race Conditions)**, acelerando dramáticamente el paso por CPU.
-3. **Reductor (Escritor I/O):** Al finalizar (coordinado vía `sync.WaitGroup`), los workers envían su mapa local por un canal `results`. El hilo principal unifica los diccionarios, ordena los resultados para garantizar determinismo, y escribe el CSV final secuencialmente.
+1. **Productor (Lector I/O):** Implementado como una goroutine anónima (`go func() { ... reader.Read() }`) dentro de `main()`. Lee el CSV secuencialmente y empaqueta los registros en arreglos (`currentChunk`). Para amortizar el costo de sincronización, envía lotes de 5,000 líneas al canal asíncrono `jobs <- currentChunk`. Al llegar al EOF, ejecuta `close(jobs)`.
+2. **Workers (Mapeadores):** Implementado en la función declarada `func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup)`. En `main()`, se instancian `W` workers estáticos. Consumen iterativamente del canal `jobs` mediante un `for range`. Cada worker parsea y agrega la demanda en una variable estrictamente local (`localAgg := make(map[string]*AggregationData)`), evitando por completo el uso de `sync.Mutex` sobre estructuras globales (Zero Race Conditions).
+3. **Monitor y Reductor (Merge Secuencial):** Una goroutine anónima (`wg.Wait(); close(results)`) monitorea el fin de los workers para cerrar el canal de recolección. Finalmente, el hilo principal (`main()`) actúa como **Reductor** iterando sobre `for localAgg := range results`. Unifica los diccionarios parciales en la variable `globalAgg`, ordena los resultados léxicamente y escribe el CSV final de forma determinista.
 
 ---
 
