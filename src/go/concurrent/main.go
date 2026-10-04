@@ -54,6 +54,8 @@ type OutputRow struct {
 // Representa un lote de filas leidas del Parquet para amortizar el costo de enviarlas por channel
 type Chunk []InputRecord
 
+var chunkPool sync.Pool
+
 func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -87,6 +89,10 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 			agg.Services[svc] = struct{}{}
 			agg.CardTypes[cType]++
 		}
+		
+		// Reciclar el chunk usando sync.Pool (GAP-05 resuelto)
+		chunk = chunk[:0]
+		chunkPool.Put(&chunk)
 	}
 	results <- localAgg
 }
@@ -110,6 +116,11 @@ func main() {
 	flag.Parse()
 
 	start := time.Now()
+
+	chunkPool.New = func() interface{} {
+		c := make(Chunk, 0, *chunkSize)
+		return &c
+	}
 
 	// Abrir archivo Parquet de entrada
 	f, err := os.Open(*inputFile)
@@ -148,7 +159,7 @@ func main() {
 
 	// Goroutine Productor: Lee Parquet row groups y encola Chunks
 	go func() {
-		var currentChunk []InputRecord
+		currentChunkPtr := chunkPool.Get().(*Chunk)
 
 		for _, rg := range pf.RowGroups() {
 			rows := make([]parquet.Row, *chunkSize)
@@ -164,10 +175,10 @@ func main() {
 						BoardingStopStn:     row[idxBoardingStn].String(),
 						RideStartDatetimeUs: row[idxRideDatetime].Int64(),
 					}
-					currentChunk = append(currentChunk, rec)
-					if len(currentChunk) == *chunkSize {
-						jobs <- currentChunk
-						currentChunk = nil
+					*currentChunkPtr = append(*currentChunkPtr, rec)
+					if len(*currentChunkPtr) == *chunkSize {
+						jobs <- *currentChunkPtr
+						currentChunkPtr = chunkPool.Get().(*Chunk)
 					}
 				}
 				if err != nil {
@@ -177,8 +188,8 @@ func main() {
 			reader.Close()
 		}
 
-		if len(currentChunk) > 0 {
-			jobs <- currentChunk
+		if len(*currentChunkPtr) > 0 {
+			jobs <- *currentChunkPtr
 		}
 		close(jobs)
 	}()

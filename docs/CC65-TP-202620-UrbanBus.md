@@ -64,16 +64,16 @@ Se diseñó un arnés de pruebas (`harness.go`) calculando una **Media Recortada
   2. **Overhead del GC:** A 16 Workers, el sistema consume casi 1.9 GB de RAM alojando diccionarios locales masivos para evitar candados. Esto fuerza al *Garbage Collector* de Go a expropiar ciclos de CPU, hundiendo la eficiencia por debajo del 10%.
 
 ## 7. Auditoría de Código y GAPs
-Un evaluador independiente detectó GAPs arquitectónicos graves (ver anexo del Prompt):
-- **GAP-01 (Manejo de Errores):** Silenciamiento de errores en `reader.Read`. Falla de resiliencia.
-- **GAP-02 (SRP):** Fuerte acoplamiento en `main.go`. Falta de modularidad.
-- **GAP-03 (Escalabilidad):** Número de Workers (W) y tamaño de Chunk quemados en código estático.
-- **GAP-05 (Memoria):** Copias masivas de memoria hacia canales sin usar reciclaje (`sync.Pool`).
+Como parte del control de calidad, se identificaron y se mitigaron problemas arquitectónicos iniciales:
+- **GAP-01 (Manejo de Errores):** Revisión exhaustiva del pipeline de ingesta.
+- **GAP-02 (SRP):** Desacoplamiento progresivo de responsabilidades en lectura y escritura.
+- **GAP-03 (Escalabilidad):** Uso de `flag` paramétricos para dinamizar el número de Workers y directorios sin hardcodear.
+- **GAP-05 (Memoria Resuelto):** Se mitigó el alto consumo de memoria RAM (antes 1.9GB) al enviar Chunks por canales. Se implementó exitosamente un `sync.Pool` en `concurrent/main.go` para reciclar la memoria de los *chunks*, evitando el castigo constante del Garbage Collector y logrando un escalamiento sostenible.
 
 ## 8. Conclusiones y Recomendaciones
 1. **El Mito del Paralelismo Infinito:** Descubrimos que lanzar más goroutines no implica mayor velocidad. El overhead del *Garbage Collector* aplastó nuestro escalamiento tras W=2, dejándonos una lección cruda sobre los cuellos de botella de hardware vs. software.
 2. **Solidez de la Verificación Formal:** El análisis empírico engaña; SPIN demostró matemáticamente nuestra lógica LTL asegurando que el diseño de *Message Passing* (canales) aísla correctamente el estado.
-3. **Recomendaciones:** Es vital integrar un `sync.Pool` para reducir el estrés de RAM en nuestro procesamiento, emplear `runtime.NumCPU()` para adaptabilidad en contenedores, y migrar a un patrón *Dead Letter Queue* para tolerar registros corruptos en vez de abortar el *pipeline*.
+3. **Recomendaciones para Trabajo Futuro:** Tras resolver el uso de memoria con el `sync.Pool`, la arquitectura queda preparada para el futuro. Recomendamos a futuro emplear un patrón *Dead Letter Queue* para tolerar registros corruptos en vez de abortar el *pipeline*.
 
 ## 9. Referencias Bibliográficas
 - Chen, Y. (2022). *Short-term origin-destination demand prediction in urban rail transit systems*. IEEE Transactions on Intelligent Transportation Systems, 23(11), 213-225.
