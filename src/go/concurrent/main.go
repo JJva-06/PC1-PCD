@@ -56,11 +56,26 @@ type Chunk []InputRecord
 
 var chunkPool sync.Pool
 
-func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup) {
+// hashString implementa FNV-1a para distribuir claves a los shards
+func hashString(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
+func worker(jobs <-chan Chunk, reducerChannels []chan map[string]*AggregationData, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// Memoria local para este worker. NO se requiere Mutex.
-	localAgg := make(map[string]*AggregationData)
+	numReducers := uint32(len(reducerChannels))
+
+	// Arreglo de N mapas locales por worker (Acumulación de vida completa)
+	localAggs := make([]map[string]*AggregationData, numReducers)
+	for i := uint32(0); i < numReducers; i++ {
+		localAggs[i] = make(map[string]*AggregationData)
+	}
 
 	for chunk := range jobs {
 		for _, record := range chunk {
@@ -68,21 +83,23 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 			svc := record.BusServiceNumber
 			cType := record.CardType
 
-			// Timestamp en microsegundos desde epoch (timestamp[us] en Parquet)
 			tsUs := record.RideStartDatetimeUs
 			dt := time.Unix(tsUs/1_000_000, (tsUs%1_000_000)*1000).UTC()
 
 			bin := dt.Truncate(15 * time.Minute)
 			key := fmt.Sprintf("%s|%d", stn, bin.Unix())
 
-			agg, exists := localAgg[key]
+			h := hashString(key) % numReducers
+			shardMap := localAggs[h]
+
+			agg, exists := shardMap[key]
 			if !exists {
 				agg = &AggregationData{
 					PassengerCount: 0,
 					Services:       make(map[string]struct{}),
 					CardTypes:      make(map[string]int),
 				}
-				localAgg[key] = agg
+				shardMap[key] = agg
 			}
 
 			agg.PassengerCount++
@@ -90,11 +107,14 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 			agg.CardTypes[cType]++
 		}
 		
-		// Reciclar el chunk usando sync.Pool (GAP-05 resuelto)
 		chunk = chunk[:0]
 		chunkPool.Put(&chunk)
 	}
-	results <- localAgg
+	
+	// Enviar cada mapa a su respectivo reducer solo al morir el worker
+	for i, m := range localAggs {
+		reducerChannels[i] <- m
+	}
 }
 
 // findColumnIndex busca el índice de una columna por nombre en el schema del Parquet
@@ -110,6 +130,7 @@ func findColumnIndex(schema *parquet.Schema, name string) int {
 
 func main() {
 	numWorkers := flag.Int("workers", runtime.NumCPU(), "Número de workers")
+	numReducers := flag.Int("reducers", 4, "Número de reducers (shards)")
 	chunkSize := flag.Int("chunksize", 5000, "Tamaño del chunk de registros")
 	inputFile := flag.String("input", "../../../data/silver/bus_data_oct2017_clean.parquet", "Input file")
 	outputFile := flag.String("output", "../../../data/gold/dataset_go_conc.parquet", "Output file")
@@ -147,14 +168,18 @@ func main() {
 	idxRideDatetime := findColumnIndex(schema, "ride_start_datetime")
 
 	jobs := make(chan Chunk, *numWorkers*2)
-	resultsCh := make(chan map[string]*AggregationData, *numWorkers)
+	
+	reducerChannels := make([]chan map[string]*AggregationData, *numReducers)
+	for i := 0; i < *numReducers; i++ {
+		reducerChannels[i] = make(chan map[string]*AggregationData, *numWorkers)
+	}
 
 	var wg sync.WaitGroup
 
 	// Iniciar pool de workers
 	for w := 1; w <= *numWorkers; w++ {
 		wg.Add(1)
-		go worker(jobs, resultsCh, &wg)
+		go worker(jobs, reducerChannels, &wg)
 	}
 
 	// Goroutine Productor: Lee Parquet row groups y encola Chunks
@@ -194,42 +219,60 @@ func main() {
 		close(jobs)
 	}()
 
-	// Goroutine Monitor: Cierra el canal de resultados cuando todos los workers terminen
+	// Goroutine Monitor: Cierra los canales de reducers cuando todos los workers terminen
 	go func() {
 		wg.Wait()
-		close(resultsCh)
+		for i := 0; i < *numReducers; i++ {
+			close(reducerChannels[i])
+		}
 	}()
 
-	// Hilo principal (Reducer): Unifica los resultados parciales en un mapa global
-	globalAgg := make(map[string]*AggregationData)
+	// Sharded Reducers
+	var reducerWg sync.WaitGroup
+	globalAggs := make([]map[string]*AggregationData, *numReducers)
 
-	for localAgg := range resultsCh {
-		for key, lData := range localAgg {
-			gData, exists := globalAgg[key]
-			if !exists {
-				gData = &AggregationData{
-					PassengerCount: 0,
-					Services:       make(map[string]struct{}),
-					CardTypes:      make(map[string]int),
+	for i := 0; i < *numReducers; i++ {
+		reducerWg.Add(1)
+		go func(shardID int, ch <-chan map[string]*AggregationData) {
+			defer reducerWg.Done()
+			shardAgg := make(map[string]*AggregationData)
+			for localAgg := range ch {
+				for key, lData := range localAgg {
+					gData, exists := shardAgg[key]
+					if !exists {
+						gData = &AggregationData{
+							PassengerCount: 0,
+							Services:       make(map[string]struct{}),
+							CardTypes:      make(map[string]int),
+						}
+						shardAgg[key] = gData
+					}
+					gData.PassengerCount += lData.PassengerCount
+					for svc := range lData.Services {
+						gData.Services[svc] = struct{}{}
+					}
+					for ct, count := range lData.CardTypes {
+						gData.CardTypes[ct] += count
+					}
 				}
-				globalAgg[key] = gData
 			}
-
-			gData.PassengerCount += lData.PassengerCount
-			for svc := range lData.Services {
-				gData.Services[svc] = struct{}{}
-			}
-			for ct, count := range lData.CardTypes {
-				gData.CardTypes[ct] += count
-			}
-		}
+			globalAggs[shardID] = shardAgg
+		}(i, reducerChannels[i])
 	}
 
-	fmt.Printf("[Concurrente] Procesamiento finalizado en %v (Bins globales: %d)\n", time.Since(start), len(globalAgg))
+	reducerWg.Wait()
+	
+	totalBins := 0
+	for _, shardAgg := range globalAggs {
+		totalBins += len(shardAgg)
+	}
+
+	fmt.Printf("[Concurrente] Procesamiento finalizado en %v (Bins globales: %d)\n", time.Since(start), totalBins)
 
 	// Procesar a formato de salida para determinismo
 	var outRows []ResultRow
-	for key, agg := range globalAgg {
+	for _, shardAgg := range globalAggs {
+		for key, agg := range shardAgg {
 		parts := strings.Split(key, "|")
 		stn := parts[0]
 
@@ -262,6 +305,7 @@ func main() {
 			DayOfWeek:        weekday,
 			Date:             binTime.Format("2006-01-02"),
 		})
+		}
 	}
 
 	sort.Slice(outRows, func(i, j int) bool {
