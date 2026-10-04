@@ -5,6 +5,15 @@
 
 ---
 
+## Índice
+1. [Contexto y Enlace con PC1](#1-contexto-y-enlace-con-pc1)
+2. [Diseño del Algoritmo Concurrente (Go)](#2-diseño-del-algoritmo-concurrente-go)
+3. [Modelo de Sincronización en Promela (Verificación Formal)](#3-modelo-de-sincronización-en-promela-verificación-formal)
+4. [Metodología de Benchmarking](#4-metodología-de-benchmarking)
+5. [Análisis de Escalabilidad y Ley de Amdahl](#5-análisis-de-escalabilidad-y-ley-de-amdahl)
+
+---
+
 ## 1. Contexto y Enlace con PC1
 En la Práctica Calificada 1 (PC1) se implementó una arquitectura Medallón (Bronze → Silver → Gold). En esta PC2, aplicaremos procesamiento concurrente a la transformación más pesada de ese pipeline: **Silver a Gold**. 
 
