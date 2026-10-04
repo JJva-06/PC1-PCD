@@ -72,5 +72,29 @@ Las pruebas se automatizaron en un arnés (`harness.go`) diseñado para rigor es
 Los resultados revelan dinámicas de concurrencia profundas, limitadas intrínsecamente por hardware y arquitectura:
 
 1. **Punto de Equilibrio (Sweet Spot en W=2):** Como se observa visualmente en el gráfico de *Speedup vs Workers* (marcado explícitamente en W=2), este es el punto de quiebre donde la curva de aceleración alcanza su máximo (1.34x). A partir de este umbral (W>2), el overhead de coordinación (la creación de estructuras locales en RAM, el paso de mensajes por canales) supera la ganancia neta por paralelismo, invirtiendo la curva.
-2. **Cuello de Botella de I/O (Amdahl):** Según la Ley de Amdahl, el speedup teórico está asintóticamente limitado por la fracción estrictamente secuencial del algoritmo. En nuestro caso, leer ~290 MB del disco (Productor) y escribir la salida ordenada (Reductor) acapara gran parte del tiempo total de reloj. A partir de W=2, el procesamiento de cadenas satura la capacidad del lector de proveer *chunks*.
+2. **Cuello de Botella de CPU (Amdahl - Sharding de Reducers):** En un inicio se pensó que el algoritmo estaba limitado únicamente por el I/O del Productor. Sin embargo, un *profiling* avanzado demostró que el merge secuencial en el hilo principal (Reductor) acaparaba el 61% del tiempo de ejecución (CPU-bound). Para solucionar esto, implementamos una arquitectura de **Sharding Estático** con $ reducers, pre-agregando en los workers (vida útil). Trade-off importante: Esta decisión elimina el pipelining entre la lectura y la reducción, ya que los reducers esperan inactivos al worker completo.
 3. **Presión de Memoria y GC (Overhead crítico):** El trade-off de aislar la memoria local para lograr *Zero Race Conditions* es un incremento exponencial en RAM. La versión concurrente con 16 workers reserva casi **1.9 GB** de memoria del sistema, comparado con los 846 MB del código secuencial. En este tramo post-equilibrio, el *Garbage Collector* de Go se ve forzado a detener el mundo (*stop-the-world*) o expropiar ciclos de CPU para recolectar las variables locales efímeras, hundiendo la eficiencia por debajo del 10% y el speedup a 1.14x.
+
+
+### Tabla de Resultados (Sharding de Reducers)
+| Workers (W) | Reducers (N) | Tiempo Recortado (ms) | Memoria (MB) | Speedup |
+|---|---|---|---|---|
+| 1 (Seq baseline)| - | 4263.33 | 807.67 | 1.00x |
+| 2 | 2 | 3137.33 | 1194.00 | 1.36x |
+| 2 | 4 | 2876.00 | 1156.67 | 1.48x |
+| 4 | 4 | 2903.00 | 1331.67 | 1.47x |
+| 4 | 8 | 2738.33 | 1340.33 | 1.56x |
+| 8 | 8 | 2883.33 | 1489.33 | 1.48x |
+
+**Conclusión del Sharding:** El óptimo se desplaza de W=2 (1.34x) a W=4, N=8 logrando **1.56x** de Speedup al eliminar el cuello de botella secuencial del Reductor, aunque sacrifica el pipelining I/O.
+
+
+### Gráfico de Speedup (Sharding)
+```mermaid
+xychart-beta
+    title "Speedup por Configuración (W,N)"
+    x-axis ["Seq", "W2 N2", "W2 N4", "W4 N4", "W4 N8", "W8 N8"]
+    y-axis "Speedup (x)" 1.0 --> 1.6
+    line [1.0, 1.36, 1.48, 1.47, 1.56, 1.48]
+```
+
