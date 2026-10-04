@@ -25,24 +25,19 @@
 /* Canales asíncronos (bufers acotados) */
 chan jobs = [3] of { byte };
 chan results = [NUM_WORKERS] of { byte };
-
 int final_count = 0; /* Estado global final (sólo modificado por Reducer) */
 
 proctype Producer() {
     byte i = 1;
-    
-    /* 1. Generación de chunks (representa leer el CSV) */
-    do
+    do /* 1. Generación de chunks (representa leer el CSV) */
     :: i <= TOTAL_CHUNKS ->
         jobs ! DATA_CHUNK;
         i++;
     :: i > TOTAL_CHUNKS ->
         break;
     od;
-
-    /* 2. Señal de terminación (equivalente a close(jobs) en Go) */
     i = 1;
-    do
+    do /* 2. Señal de terminación (equivalente a close(jobs) en Go) */
     :: i <= NUM_WORKERS ->
         jobs ! EOF_SIGNAL;
         i++;
@@ -54,39 +49,29 @@ proctype Producer() {
 proctype Worker() {
     byte local_count = 0; /* Memoria local: evita el sync.Mutex */
     byte chunk;
-
     do
     :: jobs ? chunk ->
         if
-        :: chunk == DATA_CHUNK ->
-            /* Operación local (representa parsear y agregar en map local) */
+        :: chunk == DATA_CHUNK -> /* Operación local */
             local_count = local_count + 1; 
         :: chunk == EOF_SIGNAL ->
-            /* Trabajo terminado */
             break;
         fi;
     od;
-
-    /* Envío del resultado parcial al Reducer */
-    results ! local_count;
+    results ! local_count; /* Envío del resultado parcial*/
 }
 
 proctype Reducer() {
     byte i = 1;
     byte partial;
-    
-    /* Espera recibir un resultado por cada worker */
-    do
+    do /* Espera recibir un resultado por cada worker */
     :: i <= NUM_WORKERS ->
-        results ? partial;
-        /* Merge final (Sección Crítica pero ejecutada secuencialmente por un solo Goroutine) */
-        final_count = final_count + partial;
+        results ? partial;  
+        final_count = final_count + partial; /* Merge final */
         i++;
     :: i > NUM_WORKERS ->
         break;
     od;
-
-    /* INVARIANTE CLAVE: La suma de los procesamientos locales debe ser el total exacto */
     assert(final_count == TOTAL_CHUNKS);
 }
 
@@ -102,7 +87,6 @@ ltl safe_channels { [] (len(jobs) <= 3 && len(results) <= NUM_WORKERS) }
 init {
     atomic {
         run Producer();
-        
         byte i = 1;
         do
         :: i <= NUM_WORKERS -> 
@@ -111,7 +95,6 @@ init {
         :: i > NUM_WORKERS -> 
             break;
         od;
-
         run Reducer();
     }
 }
