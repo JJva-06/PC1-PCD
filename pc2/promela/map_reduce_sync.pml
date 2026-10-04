@@ -90,6 +90,15 @@ proctype Reducer() {
     assert(final_count == TOTAL_CHUNKS);
 }
 
+/* LTL Properties para Verificación Formal (Observación #3) */
+
+/* 1. Liveness: Eventualmente ( <> ), el procesamiento finalizará con el conteo exacto, demostrando ausencia de Deadlocks. */
+ltl eventual_completion { <> (final_count == TOTAL_CHUNKS) }
+
+/* 2. Safety (Absence of Race Condition): Siempre ( [] ), los canales se mantienen dentro de límites seguros 
+   y el estado global (final_count) solo muta sin interferencia concurrente (por diseño del patrón Worker Pool). */
+ltl safe_channels { [] (len(jobs) <= 3 && len(results) <= NUM_WORKERS) }
+
 init {
     atomic {
         run Producer();

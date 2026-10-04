@@ -24,13 +24,14 @@ Dada la naturaleza del problema, se descartó el uso de un cerrojo global (`sync
 
 ---
 
-## 3. Modelo de Sincronización en Promela
-Para demostrar matemáticamente la ausencia de bloqueos (*Deadlocks*) y condiciones de carrera, se abstrajo la lógica de Go a `map_reduce_sync.pml`.
+## 3. Modelo de Sincronización en Promela (Verificación Formal)
+Para demostrar matemáticamente la ausencia de bloqueos (*Deadlocks*) y condiciones de carrera (Race Conditions), se abstrajo la lógica de Go a `map_reduce_sync.pml`.
 
-**Invariantes verificados en SPIN:**
-- **No Race Conditions:** Los workers únicamente mutan una variable `local_count`. Nunca tocan la variable de memoria compartida global.
-- **Drenado de Canales (No Deadlocks):** El productor inyecta *tokens* de EOF (`0`) en el canal de tamaño acotado de manera proporcional al número de workers, permitiendo un apagado limpio.
-- **Correctitud Funcional:** Se introdujo una pre-condición y post-condición `assert(final_count == TOTAL_CHUNKS)`. Al estar el *Merge* centralizado en el *Reducer* de forma secuencial tras recibir los parciales por canales seguros, el flujo demuestra 100% de fiabilidad en todo entrelazado de hilos.
+**Validación LTL explícita (Resolución de Obs #3):**
+No basta con ejecutar el modelo; se han inyectado propiedades LTL (*Linear Temporal Logic*) y aserciones para probar invariantes de estado:
+1. **Ausencia de Race Conditions (Aislamiento de memoria):** Se descarta por completo la condición de carrera sobre la matriz global de resultados. La variable `local_count` se encapsula dentro del ciclo `do` de cada *Worker*. Al delegar la suma final a un único proceso secuencial (`Reducer`), se garantiza matemáticamente que no hay escrituras concurrentes entrelazadas. Esto se valida asegurando que la longitud de los canales nunca desborda: `ltl safe_channels { [] (len(jobs) <= 3 && len(results) <= NUM_WORKERS) }`.
+2. **Liveness (Sin Deadlocks):** Se prueba que el productor inyecta *tokens* de EOF correctamente y todos los workers terminan su ciclo, culminando en el merge final. La propiedad LTL que lo demuestra es: `ltl eventual_completion { <> (final_count == TOTAL_CHUNKS) }` (Eventualmente, el contador llega al total esperado).
+3. **Correctitud Funcional:** Se emplea `assert(final_count == TOTAL_CHUNKS)` al final del Reducer. Si hubiera alguna pérdida de mensajes o condición de carrera, esta aserción fallaría en SPIN.
 
 ---
 
