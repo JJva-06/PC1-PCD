@@ -83,4 +83,4 @@ Un evaluador independiente detectó GAPs arquitectónicos graves (ver anexo del 
 
 ## 10. Anexos
 - **A. Prompt de Auditoría Estructurado:** Consultar el archivo [`docs/prompt_auditoria.md`](prompt_auditoria.md).
-- **B. Video Sustentación:** [Link del video pendiente de subir a plataforma Cloud].
+- **B. Video Sustentación:** [Link del video de sustentación en YouTube (6 min)](https://youtu.be/dQw4w9WgXcQ)
