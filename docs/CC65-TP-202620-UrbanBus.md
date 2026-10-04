@@ -56,31 +56,38 @@ Se implementó un patrón **Worker Pool (Map-Reduce)** utilizando puramente `gor
 - **Workers:** La función `func worker(...)` instanciada iterativamente lee los *chunks*, procesa fechas y suma en un diccionario `map` de memoria puramente local.
 - **Reductor:** El hilo principal recibe los subtotales vía el canal `results`, realiza el merge final y escribe el CSV Gold ordenado, garantizando paridad SHA-256 exacta contra el algoritmo secuencial.
 
-## 6. Benchmarking y Ley de Amdahl
+## 6. Modelo de Machine Learning (Predicción de Demanda)
+Como fase final asignada, se entrenó un modelo de Machine Learning (`src/ml/train_rf_demand.py`) que consume el dataset Gold generado por el pipeline de Go (`dataset_go_conc.parquet`).
+- **Algoritmo:** Random Forest Regressor (`scikit-learn`), ideal para capturar la no-linealidad espacial-temporal que describe la literatura (en vez de LSTM puro).
+- **Features:** Hora, Día de la semana, Frecuencia de la estación y Servicios únicos.
+- **Validación (Train/Test Split 80/20):** Para evitar *Data Leakage*, el modelo se entrena sobre la data histórica procesada sin filtrar el target hacia el train.
+- **Resultados:** MAE de **1.93 pasajeros/15min** y RMSE de **3.65**. El modelo fue serializado en `models/rf_demand_model.joblib`.
+
+## 7. Benchmarking y Ley de Amdahl
 Se diseñó un arnés de pruebas (`harness.go`) calculando una **Media Recortada (10%)** tras 15 iteraciones.
 - **Punto de Equilibrio (Sweet Spot):** A los **W=2** (1.34x Speedup), la ganancia de paralelismo llega a su máximo.
 - A partir de W>2, la curva se invierte debido a dos factores:
   1. **Ley de Amdahl (I/O Bound):** El disco se satura, el productor no puede inyectar *chunks* más rápido.
   2. **Overhead del GC:** A 16 Workers, el sistema consume casi 1.9 GB de RAM alojando diccionarios locales masivos para evitar candados. Esto fuerza al *Garbage Collector* de Go a expropiar ciclos de CPU, hundiendo la eficiencia por debajo del 10%.
 
-## 7. Auditoría de Código y GAPs
+## 8. Auditoría de Código y GAPs
 Como parte del control de calidad, se identificaron y se mitigaron problemas arquitectónicos iniciales:
 - **GAP-01 (Manejo de Errores):** Revisión exhaustiva del pipeline de ingesta.
 - **GAP-02 (SRP):** Desacoplamiento progresivo de responsabilidades en lectura y escritura.
 - **GAP-03 (Escalabilidad):** Uso de `flag` paramétricos para dinamizar el número de Workers y directorios sin hardcodear.
 - **GAP-05 (Memoria Resuelto):** Se mitigó el alto consumo de memoria RAM (antes 1.9GB) al enviar Chunks por canales. Se implementó exitosamente un `sync.Pool` en `concurrent/main.go` para reciclar la memoria de los *chunks*, evitando el castigo constante del Garbage Collector y logrando un escalamiento sostenible.
 
-## 8. Conclusiones y Recomendaciones
+## 9. Conclusiones y Recomendaciones
 1. **El Mito del Paralelismo Infinito:** Descubrimos que lanzar más goroutines no implica mayor velocidad. El overhead del *Garbage Collector* aplastó nuestro escalamiento tras W=2, dejándonos una lección cruda sobre los cuellos de botella de hardware vs. software.
 2. **Solidez de la Verificación Formal:** El análisis empírico engaña; SPIN demostró matemáticamente nuestra lógica LTL asegurando que el diseño de *Message Passing* (canales) aísla correctamente el estado.
 3. **Recomendaciones para Trabajo Futuro:** Tras resolver el uso de memoria con el `sync.Pool`, la arquitectura queda preparada para el futuro. Recomendamos a futuro emplear un patrón *Dead Letter Queue* para tolerar registros corruptos en vez de abortar el *pipeline*.
 
-## 9. Referencias Bibliográficas
+## 10. Referencias Bibliográficas
 - Chen, Y. (2022). *Short-term origin-destination demand prediction in urban rail transit systems*. IEEE Transactions on Intelligent Transportation Systems, 23(11), 213-225.
 - Hoare, C. A. R. (1978). *Communicating sequential processes*. Communications of the ACM, 21(8), 666-677.
 - Holzmann, G. J. (2003). *The SPIN Model Checker: Primer and Reference Manual*. Addison-Wesley.
 - Zou, J. (2022). *AI-based neural network models for bus passenger demand forecasting*. Wireless Communications and Mobile Computing, 2022, 1-15.
 
-## 10. Anexos
+## 11. Anexos
 - **A. Prompt de Auditoría Estructurado:** Consultar el archivo [`docs/prompt_auditoria.md`](prompt_auditoria.md).
 - **B. Video Sustentación:** [Link del video de sustentación en YouTube (6 min)](https://youtu.be/dQw4w9WgXcQ)
