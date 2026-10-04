@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -65,11 +66,13 @@ func findColumnIndex(schema *parquet.Schema, name string) int {
 func main() {
 	start := time.Now()
 
-	inputFile := "../../../data/silver/bus_data_oct2017_clean.parquet"
-	outputFile := "../../../data/gold/dataset_go_seq.parquet"
+	flag.Parse()
+	inputFile := flag.String("input", "../../../data/silver/bus_data_oct2017_clean.parquet", "Ruta al archivo de entrada")
+	outputFile := flag.String("output", "../../../data/gold/dataset_go_seq.parquet", "Ruta al archivo de salida")
+	flag.Parse()
 
 	// Abrir archivo Parquet de entrada
-	f, err := os.Open(inputFile)
+	f, err := os.Open(*inputFile)
 	if err != nil {
 		log.Fatalf("Error abriendo archivo input: %v", err)
 	}
@@ -209,7 +212,7 @@ func main() {
 		})
 	}
 
-	if err := parquet.WriteFile(outputFile, parquetOut); err != nil {
+	if err := parquet.WriteFile(*outputFile, parquetOut); err != nil {
 		log.Fatalf("Error escribiendo archivo Parquet de salida: %v", err)
 	}
 
