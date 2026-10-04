@@ -66,8 +66,8 @@ func computeTrimmedMean(runs []Result) (float64, float64) {
 func main() {
 	// 1. Compilar binarios
 	fmt.Println("Compilando binarios (optimizados)...")
-	exec.Command("C:\\Program Files\\Go\\bin\\go.exe", "build", "-o", "seq.exe", "pc2/go/sequential/main.go").Run()
-	exec.Command("C:\\Program Files\\Go\\bin\\go.exe", "build", "-o", "conc.exe", "pc2/go/concurrent/main.go").Run()
+	exec.Command("C:\\Program Files\\Go\\bin\\go.exe", "build", "-o", "seq.exe", "src/go/sequential/main.go").Run()
+	exec.Command("C:\\Program Files\\Go\\bin\\go.exe", "build", "-o", "conc.exe", "src/go/concurrent/main.go").Run()
 	defer os.Remove("seq.exe")
 	defer os.Remove("conc.exe")
 
