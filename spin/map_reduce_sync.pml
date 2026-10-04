@@ -80,9 +80,10 @@ proctype Reducer() {
 /* 1. Liveness: Eventualmente ( <> ), el procesamiento finalizará con el conteo exacto, demostrando ausencia de Deadlocks. */
 ltl eventual_completion { <> (final_count == TOTAL_CHUNKS) }
 
-/* 2. Safety (Absence of Race Condition): Siempre ( [] ), los canales se mantienen dentro de límites seguros 
-   y el estado global (final_count) solo muta sin interferencia concurrente (por diseño del patrón Worker Pool). */
-ltl safe_channels { [] (len(jobs) <= 3 && len(results) <= NUM_WORKERS) }
+/* 2. Safety (Absence of Race Condition): Siempre ( [] ), el conteo final nunca excede el total procesado.
+   Esto reemplaza una validación trivial de buffers, garantizando matemáticamente que ningún Worker 
+   duplica conteos por fallas de concurrencia o de paso de mensajes. */
+ltl no_double_counting { [] (final_count <= TOTAL_CHUNKS) }
 
 init {
     atomic {
