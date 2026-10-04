@@ -30,7 +30,11 @@ func TestFindColumnIndex(t *testing.T) {
 func TestWorkerAggregation(t *testing.T) {
 	// Preparar datos de prueba
 	jobs := make(chan Chunk, 1)
-	results := make(chan map[string]*AggregationData, 1)
+	
+	numReducers := 1
+	reducerChannels := make([]chan map[string]*AggregationData, numReducers)
+	reducerChannels[0] = make(chan map[string]*AggregationData, 1)
+
 	var wg sync.WaitGroup
 
 	// Usaremos una pool local para no ensuciar la global en tests
@@ -59,11 +63,11 @@ func TestWorkerAggregation(t *testing.T) {
 	close(jobs)
 
 	wg.Add(1)
-	go worker(jobs, results, &wg)
+	go worker(jobs, reducerChannels, &wg)
 	wg.Wait()
-	close(results)
+	close(reducerChannels[0])
 
-	res := <-results
+	res := <-reducerChannels[0]
 	
 	// Verificar la agregación
 	if len(res) != 1 {

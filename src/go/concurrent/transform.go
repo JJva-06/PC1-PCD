@@ -38,11 +38,16 @@ func findColumnIndex(schema *parquet.Schema, name string) int {
 	return -1
 }
 
-// worker transforma chunks de InputRecord y aplica agregacion local (combiner)
-func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup) {
+// worker transforma chunks de InputRecord y aplica agregacion local sharded
+func worker(jobs <-chan Chunk, reducerChannels []chan map[string]*AggregationData, wg *sync.WaitGroup) {
 	defer wg.Done()
+	numReducers := uint32(len(reducerChannels))
 
-	localAgg := make(map[string]*AggregationData)
+	// Arreglo de N mapas locales por worker (Acumulación de vida completa)
+	localAggs := make([]map[string]*AggregationData, numReducers)
+	for i := uint32(0); i < numReducers; i++ {
+		localAggs[i] = make(map[string]*AggregationData)
+	}
 
 	for chunk := range jobs {
 		for _, record := range chunk {
@@ -56,14 +61,17 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 			bin := dt.Truncate(15 * time.Minute)
 			key := fmt.Sprintf("%s|%d", stn, bin.Unix())
 
-			agg, exists := localAgg[key]
+			h := HashString(key) % numReducers
+			shardMap := localAggs[h]
+
+			agg, exists := shardMap[key]
 			if !exists {
 				agg = &AggregationData{
 					PassengerCount: 0,
 					Services:       make(map[string]struct{}),
 					CardTypes:      make(map[string]int),
 				}
-				localAgg[key] = agg
+				shardMap[key] = agg
 			}
 
 			agg.PassengerCount++
@@ -74,5 +82,9 @@ func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *s
 		chunk = chunk[:0]
 		chunkPool.Put(&chunk)
 	}
-	results <- localAgg
+	
+	// Enviar cada mapa a su respectivo reducer solo al morir el worker
+	for i, m := range localAggs {
+		reducerChannels[i] <- m
+	}
 }

@@ -14,6 +14,7 @@ import (
 
 func main() {
 	numWorkers := flag.Int("workers", runtime.NumCPU(), "Número de workers")
+	numReducers := flag.Int("reducers", 4, "Número de reducers (shards)")
 	chunkSize := flag.Int("chunksize", 5000, "Tamaño del chunk de registros")
 	inputFile := flag.String("input", "../../../data/silver/bus_data_oct2017_clean.parquet", "Input file")
 	outputFile := flag.String("output", "../../../data/gold/dataset_go_conc.parquet", "Output file")
@@ -45,27 +46,49 @@ func main() {
 	cols := ExtractColumns(pf.Schema())
 
 	jobs := make(chan Chunk, *numWorkers*2)
-	resultsCh := make(chan map[string]*AggregationData, *numWorkers)
+	
+	reducerChannels := make([]chan map[string]*AggregationData, *numReducers)
+	for i := 0; i < *numReducers; i++ {
+		reducerChannels[i] = make(chan map[string]*AggregationData, *numWorkers)
+	}
 
 	var wg sync.WaitGroup
 
 	for w := 1; w <= *numWorkers; w++ {
 		wg.Add(1)
-		go worker(jobs, resultsCh, &wg)
+		go worker(jobs, reducerChannels, &wg)
 	}
 
 	go ReaderRoutine(pf, *chunkSize, cols, jobs)
 
 	go func() {
 		wg.Wait()
-		close(resultsCh)
+		for i := 0; i < *numReducers; i++ {
+			close(reducerChannels[i])
+		}
 	}()
 
-	globalAgg := ReducerRoutine(resultsCh)
+	var reducerWg sync.WaitGroup
+	globalAggs := make([]map[string]*AggregationData, *numReducers)
 
-	fmt.Printf("[Concurrente] Procesamiento finalizado en %v (Bins globales: %d)\n", time.Since(start), len(globalAgg))
+	for i := 0; i < *numReducers; i++ {
+		reducerWg.Add(1)
+		go func(shardID int, ch <-chan map[string]*AggregationData) {
+			defer reducerWg.Done()
+			globalAggs[shardID] = ReducerRoutine(ch)
+		}(i, reducerChannels[i])
+	}
 
-	outRows := FormatResults(globalAgg)
+	reducerWg.Wait()
+	
+	totalBins := 0
+	for _, shardAgg := range globalAggs {
+		totalBins += len(shardAgg)
+	}
+
+	fmt.Printf("[Concurrente] Procesamiento finalizado en %v (Bins globales: %d)\n", time.Since(start), totalBins)
+
+	outRows := FormatResults(globalAggs)
 
 	var parquetOut []OutputRow
 	for _, r := range outRows {
