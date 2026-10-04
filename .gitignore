@@ -40,3 +40,14 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ============================
+# Archivos generados y temporales
+# ============================
+scratch/
+*.docx
+*.pdf
+data/bronze/
+data/silver/
+data/gold/
+!data/gold/*.csv
