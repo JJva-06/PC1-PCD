@@ -67,7 +67,7 @@ func main() {
 	// 1. Compilar binarios
 	fmt.Println("Compilando binarios (optimizados)...")
 	exec.Command("go", "build", "-o", "seq.exe", "../sequential/main.go").Run()
-	exec.Command("go", "build", "-o", "conc.exe", "../concurrent/main.go").Run()
+	exec.Command("go", "build", "-o", "conc.exe", "../concurrent").Run()
 	defer os.Remove("seq.exe")
 	defer os.Remove("conc.exe")
 
