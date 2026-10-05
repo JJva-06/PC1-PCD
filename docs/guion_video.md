@@ -13,15 +13,15 @@
 
 ### [2:00 - 4:00] Jorge Garcia: Concurrencia y Verificación Formal (Spin)
 *(Slide: Patrón Worker Pool y Output de SPIN)*
-- **Arquitectura en Go:** "Para la PC2, descartamos usar un `sync.Mutex` global porque generaba alta contención. Implementamos un patrón *Worker Pool* con *Local Reduction*: un productor envía los registros por canales, y múltiples workers suman los datos en sus diccionarios locales de memoria."
+- **Arquitectura en Go:** "Para resolverlo, descartamos usar un `sync.Mutex` global porque generaba alta contención. Implementamos un patrón *Worker Pool* con *Local Reduction*: un productor envía los registros por canales, y múltiples workers suman los datos en diccionarios aislados en memoria."
 - **Cero Condiciones de Carrera:** "Esto erradica las *Race Conditions*. Para probarlo matemáticamente, modelamos nuestro código en Promela y usamos el verificador SPIN."
-- **Fórmulas LTL:** "Inyectamos fórmulas LTL para validar *Liveness* y *Safety*. El output de SPIN arrojó cero errores y ninguna aserción fallida, demostrando que nuestros canales acotados son libres de *Deadlocks* y logran exclusión mutua perfecta por diseño, sin candados."
+- **Fórmulas LTL:** "Inyectamos fórmulas LTL para validar *Liveness* y *Safety*. El output de SPIN arrojó cero errores, demostrando que nuestros canales acotados son libres de *Deadlocks* y logran exclusión mutua perfecta por diseño."
 
-### [4:00 - 6:00] José Villanueva: Benchmarking, GAPs y Conclusiones
-*(Slide: Gráfico de Speedup y Ley de Amdahl)*
-- **Análisis de Rendimiento:** "Al correr el benchmark con una media recortada, hallamos que el *Sweet Spot* es con apenas 2 Workers (1.34x de Speedup). A partir de ahí, la ganancia cae drásticamente. Esto ilustra la Ley de Amdahl: nuestro cuello de botella es la lectura/escritura del disco duro (I/O Bound)."
-- **Auditoría (GAPs):** "Además, corrimos una auditoría externa automatizada que arrojó 5 GAPs. El más crítico es la presión de memoria: a 16 workers, consumimos 1.9 GB de RAM, forzando al Garbage Collector de Go a expropiar ciclos de CPU y hundiendo la eficiencia."
-- **Recomendaciones:** "Como conclusión, demostramos teórica y matemáticamente nuestro diseño concurrente, pero para llevarlo a un entorno Cloud productivo, recomendamos implementar un `sync.Pool` para reciclar memoria, usar variables de entorno para los workers, y un patrón *Dead Letter Queue* para ser tolerantes a errores de parseo. Muchas gracias."
+### [4:00 - 6:00] José Villanueva: Benchmarking, Refactorización y Conclusiones
+*(Slide: Gráfico de Speedup y Sharding)*
+- **Análisis de Rendimiento y Amdahl:** "Inicialmente, nuestro límite de aceleración (Speedup) se estancaba pronto. Al aplicar un *profiling* avanzado, descubrimos un cuello de botella de CPU: la reducción secuencial de los diccionarios. Para solucionarlo, implementamos **Sharding Estático** con $N$ reducers paralelos (hasheando por estación y tiempo)."
+- **Auditoría y Correcciones:** "Adicionalmente, corregimos brechas técnicas: implementamos un `sync.Pool` para reciclar memoria y evitar que el Garbage Collector nos quite ciclos de CPU, logrando nuestro mejor tiempo con **4 Workers y 8 Reducers (1.56x de Speedup)**."
+- **Conclusiones:** "En conclusión, logramos transformar nuestro proyecto en un pipeline concurrente validado matemáticamente, tolerante a fallos mediante control estricto de errores (`io.EOF`), y con una estructura limpia orientada a microservicios. Muchas gracias."
 
 ---
-> ⚠️ **RECORDATORIO PARA EL EQUIPO:** Graben el video en Zoom/Teams, súbanlo a YouTube (Oculto) o Google Drive (Público), y **peguen el enlace en el Anexo B del documento `tp_reporte_final.md` antes de enviar el PDF al profesor.**
+> 💡 **RECORDATORIO PARA EL EQUIPO:** Graben el video en Zoom/Teams, súbanlo a YouTube (Oculto) o Google Drive (Público), y **peguen el enlace en la portada de su informe final** antes de enviarlo al profesor.
