@@ -15,9 +15,9 @@
 ---
 
 ## 1. Contexto y Enlace con PC1
-En la Práctica Calificada 1 (PC1) se implementó una arquitectura Medallón (Bronze → Silver → Gold). En esta PC2, aplicaremos procesamiento concurrente a la transformación más pesada de ese pipeline: **Silver a Gold**. 
+En la Práctica Calificada 1 (PC1) se implementó una arquitectura Medallón (Bronze → Silver → Gold). En esta PC2 y TP, aplicamos procesamiento concurrente a la transformación más pesada de ese pipeline: **Silver a Gold**. 
 
-El objetivo del algoritmo es leer `1,952,152` registros transaccionales validados (CSV Silver, ~290 MB), parsear las fechas, calcular ventanas temporales de 15 minutos (binning), y agregar métricas por estación de abordaje (conteo de pasajeros, servicios únicos y tipo de tarjeta dominante), para exportar el dataset Gold final.
+El algoritmo fue validado inicialmente sobre el mes base de octubre 2017 (`1,952,152` registros transaccionales validados en Parquet Silver, ~64 MB / CSV ~290 MB) y posteriormente escalado al procesamiento consolidado de 4 meses (Octubre, Noviembre, Diciembre 2017 y Enero 2018), totalizando **5,447,661 registros** en Silver para generar un dataset Gold consolidado de **1,260,218 filas** (ventanas de 15 minutos), superando la meta de 1 millón de registros.
 
 ---
 
@@ -26,9 +26,9 @@ El objetivo del algoritmo es leer `1,952,152` registros transaccionales validado
 Dada la naturaleza del problema, se descartó el uso de un cerrojo global (`sync.Mutex`) por cada línea del CSV debido a la alta contención que generaría. En su lugar, se implementó un **Worker Pool con Reducción Local (Patrón Map-Reduce)**.
 
 ### Fases del Pipeline:
-1. **Productor (Lector I/O):** Implementado como una goroutine anónima (`go func() { ... reader.Read() }`) dentro de `main()`. Lee el CSV secuencialmente y empaqueta los registros en arreglos (`currentChunk`). Para amortizar el costo de sincronización, envía lotes de 5,000 líneas al canal asíncrono `jobs <- currentChunk`. Al llegar al EOF, ejecuta `close(jobs)`.
-2. **Workers (Mapeadores):** Implementado en la función declarada `func worker(jobs <-chan Chunk, results chan<- map[string]*AggregationData, wg *sync.WaitGroup)`. En `main()`, se instancian `W` workers estáticos. Consumen iterativamente del canal `jobs` mediante un `for range`. Cada worker parsea y agrega la demanda en una variable estrictamente local (`localAgg := make(map[string]*AggregationData)`), evitando por completo el uso de `sync.Mutex` sobre estructuras globales (Zero Race Conditions).
-3. **Monitor y Reductor (Merge Secuencial):** Una goroutine anónima (`wg.Wait(); close(results)`) monitorea el fin de los workers para cerrar el canal de recolección. Finalmente, el hilo principal (`main()`) actúa como **Reductor** iterando sobre `for localAgg := range results`. Unifica los diccionarios parciales en la variable `globalAgg`, ordena los resultados léxicamente y escribe el CSV final de forma determinista.
+1. **Productor (Lector I/O):** Implementado en `ReaderRoutine`. Lee los archivos Parquet en secuencia vía streaming y empaqueta los registros en arreglos (`currentChunk`). Para amortizar el costo de sincronización, envía lotes de 5,000 líneas al canal asíncrono `jobs <- currentChunk`. Al completar la lectura de todos los archivos de entrada, ejecuta `close(jobs)`.
+2. **Workers (Mapeadores):** Implementado en la función declarada `func worker(jobs <-chan Chunk, reducerChannels []chan map[string]*AggregationData, wg *sync.WaitGroup)`. En `main()`, se instancian `W` workers estáticos. Consumen iterativamente del canal `jobs` mediante un `for range`. Cada worker parsea y agrega la demanda en una variable estrictamente local (`localAggs`), evitando por completo el uso de `sync.Mutex` sobre estructuras globales (Zero Race Conditions).
+3. **Monitor y Reductor (Merge Sharded):** Una goroutine anónima (`wg.Wait(); close(reducerChannels[i])`) monitorea el fin de los workers para cerrar los canales de recolección. Finalmente, los **Reducers paralelos** (Sharding estático por hash de clave) consolidan los diccionarios parciales, ordenan los resultados léxicamente y escriben el dataset Gold final de forma determinista con paridad SHA-256 exacta frente a la versión secuencial.
 
 ---
 
@@ -37,7 +37,7 @@ Para demostrar matemáticamente la ausencia de bloqueos (*Deadlocks*) y condicio
 
 **Validación LTL explícita (Resolución de Obs #3):**
 No basta con ejecutar el modelo; se han inyectado propiedades LTL (*Linear Temporal Logic*) y aserciones para probar invariantes de estado:
-1. **Ausencia de Race Conditions (Aislamiento de memoria):** Se descarta por completo la condición de carrera sobre la matriz global de resultados. La variable `local_count` se encapsula dentro del ciclo `do` de cada *Worker*. Al delegar la suma final a un único proceso secuencial (`Reducer`), se garantiza matemáticamente que no hay escrituras concurrentes entrelazadas. Esto se valida asegurando que la longitud de los canales nunca desborda: `ltl safe_channels { [] (len(jobs) <= 3 && len(results) <= NUM_WORKERS) }`.
+1. **Ausencia de Race Conditions (Aislamiento de memoria):** Se descarta por completo la condición de carrera sobre la matriz global de resultados. La variable `local_count` se encapsula dentro del ciclo `do` de cada *Worker*. Al delegar la suma final a un único proceso secuencial (`Reducer`), se garantiza matemáticamente que no hay escrituras concurrentes entrelazadas. La propiedad de seguridad LTL que lo demuestra es: `ltl no_double_counting { [] (final_count <= TOTAL_CHUNKS) }` (el conteo final nunca excede el total emitido).
 2. **Liveness (Sin Deadlocks):** Se prueba que el productor inyecta *tokens* de EOF correctamente y todos los workers terminan su ciclo, culminando en el merge final. La propiedad LTL que lo demuestra es: `ltl eventual_completion { <> (final_count == TOTAL_CHUNKS) }` (Eventualmente, el contador llega al total esperado).
 3. **Correctitud Funcional:** Se emplea `assert(final_count == TOTAL_CHUNKS)` al final del Reducer. Si hubiera alguna pérdida de mensajes o condición de carrera, esta aserción fallaría en SPIN.
 
