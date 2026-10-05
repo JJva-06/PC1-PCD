@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ func main() {
 	numWorkers := flag.Int("workers", runtime.NumCPU(), "Número de workers")
 	numReducers := flag.Int("reducers", 4, "Número de reducers (shards)")
 	chunkSize := flag.Int("chunksize", 5000, "Tamaño del chunk de registros")
-	inputFile := flag.String("input", "../../../data/silver/bus_data_oct2017_clean.parquet", "Input file")
+	inputFile := flag.String("input", "../../../data/silver/bus_data_*_clean.parquet", "Input file o patron glob")
 	outputFile := flag.String("output", "../../../data/gold/dataset_go_conc.parquet", "Output file")
 	flag.Parse()
 
@@ -27,23 +26,11 @@ func main() {
 		return &c
 	}
 
-	f, err := os.Open(*inputFile)
-	if err != nil {
-		log.Fatalf("Error abriendo archivo input: %v", err)
+	inputFiles, err := ResolveInputFiles(*inputFile)
+	if err != nil || len(inputFiles) == 0 {
+		log.Fatalf("No se encontraron archivos de entrada para '%s': %v", *inputFile, err)
 	}
-	defer f.Close()
-
-	stat, err := f.Stat()
-	if err != nil {
-		log.Fatalf("Error obteniendo stat del archivo: %v", err)
-	}
-
-	pf, err := parquet.OpenFile(f, stat.Size())
-	if err != nil {
-		log.Fatalf("Error abriendo Parquet: %v", err)
-	}
-
-	cols := ExtractColumns(pf.Schema())
+	fmt.Printf("[Concurrente] Procesando %d archivo(s): %v\n", len(inputFiles), inputFiles)
 
 	jobs := make(chan Chunk, *numWorkers*2)
 	
@@ -59,7 +46,7 @@ func main() {
 		go worker(jobs, reducerChannels, &wg)
 	}
 
-	go ReaderRoutine(pf, *chunkSize, cols, jobs)
+	go ReaderRoutine(inputFiles, *chunkSize, jobs)
 
 	go func() {
 		wg.Wait()
@@ -104,8 +91,9 @@ func main() {
 		})
 	}
 
-	if err := parquet.WriteFile(*outputFile, parquetOut); err != nil {
-		log.Fatalf("Error escribiendo archivo Parquet de salida: %v", err)
+	resolvedOut := ResolveOutputPath(*outputFile)
+	if err := parquet.WriteFile(resolvedOut, parquetOut); err != nil {
+		log.Fatalf("Error escribiendo archivo Parquet de salida '%s': %v", resolvedOut, err)
 	}
 
 	var m runtime.MemStats

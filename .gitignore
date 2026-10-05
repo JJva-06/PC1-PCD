@@ -59,3 +59,4 @@ data/bronze/
 data/silver/
 data/gold/
 !data/gold/*.csv
+env/

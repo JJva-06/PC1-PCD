@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -13,6 +14,80 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 )
+
+// ResolveInputFiles resuelve si la ruta es un archivo unico, lista por comas, directorio o patron glob,
+// buscando candidatos relativos si el directorio de ejecucion varia.
+func ResolveInputFiles(input string) ([]string, error) {
+	candidates := []string{
+		input,
+		"../../" + strings.TrimPrefix(input, "../../../"),
+		strings.TrimPrefix(input, "../../../"),
+	}
+
+	for _, cand := range candidates {
+		files, err := resolveCandidate(cand)
+		if err == nil && len(files) > 0 {
+			return files, nil
+		}
+	}
+
+	return resolveCandidate(input)
+}
+
+func resolveCandidate(input string) ([]string, error) {
+	if strings.Contains(input, ",") {
+		parts := strings.Split(input, ",")
+		var files []string
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				files = append(files, trimmed)
+			}
+		}
+		return files, nil
+	}
+
+	fi, err := os.Stat(input)
+	if err == nil && fi.IsDir() {
+		matches, err := filepath.Glob(filepath.Join(input, "bus_data_*_clean.parquet"))
+		if err != nil || len(matches) == 0 {
+			matches, _ = filepath.Glob(filepath.Join(input, "*.parquet"))
+		}
+		sort.Strings(matches)
+		return matches, nil
+	}
+
+	if strings.ContainsAny(input, "*?[") {
+		matches, err := filepath.Glob(input)
+		if err != nil {
+			return nil, err
+		}
+		sort.Strings(matches)
+		return matches, nil
+	}
+
+	if _, err := os.Stat(input); err == nil {
+		return []string{input}, nil
+	}
+
+	return nil, os.ErrNotExist
+}
+
+// ResolveOutputPath ajusta la ruta de salida segun el directorio de trabajo actual
+func ResolveOutputPath(out string) string {
+	candidates := []string{
+		out,
+		"../../" + strings.TrimPrefix(out, "../../../"),
+		strings.TrimPrefix(out, "../../../"),
+	}
+	for _, c := range candidates {
+		d := filepath.Dir(c)
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			return c
+		}
+	}
+	return out
+}
 
 // InputRecord representa una fila del Parquet de Silver (solo los campos necesarios)
 type InputRecord struct {
@@ -67,88 +142,87 @@ func findColumnIndex(schema *parquet.Schema, name string) int {
 func main() {
 	start := time.Now()
 
-	flag.Parse()
-	inputFile := flag.String("input", "../../../data/silver/bus_data_oct2017_clean.parquet", "Ruta al archivo de entrada")
+	inputFile := flag.String("input", "../../../data/silver/bus_data_*_clean.parquet", "Ruta al archivo o patrón de entrada")
 	outputFile := flag.String("output", "../../../data/gold/dataset_go_seq.parquet", "Ruta al archivo de salida")
 	flag.Parse()
 
-	// Abrir archivo Parquet de entrada
-	f, err := os.Open(*inputFile)
-	if err != nil {
-		log.Fatalf("Error abriendo archivo input: %v", err)
+	inputFiles, err := ResolveInputFiles(*inputFile)
+	if err != nil || len(inputFiles) == 0 {
+		log.Fatalf("No se encontraron archivos de entrada para '%s': %v", *inputFile, err)
 	}
-	defer f.Close()
-
-	stat, err := f.Stat()
-	if err != nil {
-		log.Fatalf("Error obteniendo stat del archivo: %v", err)
-	}
-
-	pf, err := parquet.OpenFile(f, stat.Size())
-	if err != nil {
-		log.Fatalf("Error abriendo Parquet: %v", err)
-	}
-
-	// Descubrir índices de columnas por nombre
-	schema := pf.Schema()
-	idxCardType := findColumnIndex(schema, "Card_Type")
-	idxBusSvc := findColumnIndex(schema, "Bus_Service_Number")
-	idxBoardingStn := findColumnIndex(schema, "Boarding_stop_stn")
-	idxRideDatetime := findColumnIndex(schema, "ride_start_datetime")
+	fmt.Printf("[Secuencial] Procesando %d archivo(s): %v\n", len(inputFiles), inputFiles)
 
 	// El mapa global usa como llave: BoardingStopStn|TimeBin
 	globalAgg := make(map[string]*AggregationData)
 	rowCount := 0
 
-	// Bucle principal de procesamiento: iterar sobre row groups
-	buf := make([]parquet.Row, 4096)
-	for _, rg := range pf.RowGroups() {
-		reader := rg.Rows()
-
-		for {
-			n, err := reader.ReadRows(buf)
-			for i := 0; i < n; i++ {
-				row := buf[i]
-				rowCount++
-
-				// Extraccion
-				stn := row[idxBoardingStn].String()
-				svc := row[idxBusSvc].String()
-				cType := row[idxCardType].String()
-
-				// Timestamp en microsegundos desde epoch (timestamp[us] en Parquet)
-				tsUs := row[idxRideDatetime].Int64()
-				dt := time.Unix(tsUs/1_000_000, (tsUs%1_000_000)*1000).UTC()
-
-				// Binning 15 min (floor)
-				bin := dt.Truncate(15 * time.Minute)
-
-				// Llave de agregacion
-				key := fmt.Sprintf("%s|%d", stn, bin.Unix())
-
-				// Agregacion
-				agg, exists := globalAgg[key]
-				if !exists {
-					agg = &AggregationData{
-						PassengerCount: 0,
-						Services:       make(map[string]struct{}),
-						CardTypes:      make(map[string]int),
-					}
-					globalAgg[key] = agg
-				}
-
-				agg.PassengerCount++
-				agg.Services[svc] = struct{}{}
-				agg.CardTypes[cType]++
-			}
-			if err != nil {
-				if err != io.EOF {
-					log.Fatalf("Error fatal al leer el dataset Parquet: %v", err)
-				}
-				break
-			}
+	for _, path := range inputFiles {
+		f, err := os.Open(path)
+		if err != nil {
+			log.Fatalf("Error abriendo archivo input '%s': %v", path, err)
 		}
-		reader.Close()
+
+		stat, err := f.Stat()
+		if err != nil {
+			f.Close()
+			log.Fatalf("Error obteniendo stat del archivo '%s': %v", path, err)
+		}
+
+		pf, err := parquet.OpenFile(f, stat.Size())
+		if err != nil {
+			f.Close()
+			log.Fatalf("Error abriendo Parquet '%s': %v", path, err)
+		}
+
+		schema := pf.Schema()
+		idxCardType := findColumnIndex(schema, "Card_Type")
+		idxBusSvc := findColumnIndex(schema, "Bus_Service_Number")
+		idxBoardingStn := findColumnIndex(schema, "Boarding_stop_stn")
+		idxRideDatetime := findColumnIndex(schema, "ride_start_datetime")
+
+		buf := make([]parquet.Row, 4096)
+		for _, rg := range pf.RowGroups() {
+			reader := rg.Rows()
+
+			for {
+				n, err := reader.ReadRows(buf)
+				for i := 0; i < n; i++ {
+					row := buf[i]
+					rowCount++
+
+					stn := row[idxBoardingStn].String()
+					svc := row[idxBusSvc].String()
+					cType := row[idxCardType].String()
+
+					tsUs := row[idxRideDatetime].Int64()
+					dt := time.Unix(tsUs/1_000_000, (tsUs%1_000_000)*1000).UTC()
+					bin := dt.Truncate(15 * time.Minute)
+					key := fmt.Sprintf("%s|%d", stn, bin.Unix())
+
+					agg, exists := globalAgg[key]
+					if !exists {
+						agg = &AggregationData{
+							PassengerCount: 0,
+							Services:       make(map[string]struct{}),
+							CardTypes:      make(map[string]int),
+						}
+						globalAgg[key] = agg
+					}
+
+					agg.PassengerCount++
+					agg.Services[svc] = struct{}{}
+					agg.CardTypes[cType]++
+				}
+				if err != nil {
+					if err != io.EOF {
+						log.Fatalf("Error fatal al leer el dataset Parquet '%s': %v", path, err)
+					}
+					break
+				}
+			}
+			reader.Close()
+		}
+		f.Close()
 	}
 
 	fmt.Printf("[Secuencial] Procesados %d registros en %v. Agrupados en %d bins.\n", rowCount, time.Since(start), len(globalAgg))
@@ -216,8 +290,9 @@ func main() {
 		})
 	}
 
-	if err := parquet.WriteFile(*outputFile, parquetOut); err != nil {
-		log.Fatalf("Error escribiendo archivo Parquet de salida: %v", err)
+	resolvedOut := ResolveOutputPath(*outputFile)
+	if err := parquet.WriteFile(resolvedOut, parquetOut); err != nil {
+		log.Fatalf("Error escribiendo archivo Parquet de salida '%s': %v", resolvedOut, err)
 	}
 
 	var m runtime.MemStats
